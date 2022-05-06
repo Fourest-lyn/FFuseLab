@@ -1,5 +1,6 @@
 #include "lib/rbtree.h"
 #include <string.h>
+#include <stdlib.h>
 
 #define maxN 1000
 struct FFL_node //This is a simple structure
@@ -7,19 +8,19 @@ struct FFL_node //This is a simple structure
     const char *path;
     void *data;
     int leaf_flag;
-    // mode_t mode;
-    // struct stat fstat;
+
     struct rb_node node;
 };
 
 static struct rb_root Root;
 
-static inline FFL_node* newNode(const char *path, void *data, int leaf_flag)
+static inline struct FFL_node *newNode(const char *path, void *data, int leaf_flag)
 {
     struct FFL_node* node=(struct FFL_node*)malloc(sizeof(struct FFL_node));
     node->path=strdup(path);
-    *node->data=*data;
+    node->data=data;
     node->leaf_flag=leaf_flag;
+    return node;
 }
 
 static inline int FFL_cmp(const struct FFL_node* node1,const struct FFL_node* node2)
@@ -29,6 +30,16 @@ static inline int FFL_cmp(const struct FFL_node* node1,const struct FFL_node* no
     else return out;
 }
 
+static inline int strCheck(const char *path)
+{
+    int len=strlen(path),count=0;
+    for(int i=len-1;i>=0;--i)
+    {
+        if (path[i]=='/') count++;
+        if (count==2) return 1;
+    }
+    return 0;
+}
 
 static inline char* strChange(const char *path)
 {
@@ -46,7 +57,7 @@ static inline char* strChange(const char *path)
 }
 
 
-/** RedBlackTree part
+/** RedBlackTree part for use
  * reference with site https://www.cnblogs.com/haippy/archive/2012/09/02/2668099.html
  *  
  */
@@ -90,6 +101,7 @@ int __insert(struct rb_root *root, struct FFL_node *data)
     return 1;
 }
 
+/*
 void __free(struct FFL_node *node)
 {
     if (node != NULL) 
@@ -103,4 +115,4 @@ void __free(struct FFL_node *node)
         node = NULL;
     }
 }
-
+*/
