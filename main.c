@@ -129,10 +129,10 @@ static int FFL_write(const char *path, const char *buf, size_t size, off_t offse
 {
     addLog("write",path);
     //common write part
-    struct FFL_node*  node=__search(&Root,path);
+    // struct FFL_node*  node=__search(&Root,path);
+    struct FFL_node* node=(struct FFL_node*)fi->fh;
     if(node==NULL) return -EEXIST;
-    assert(node == (struct FFL_node*)fi->fh);
-    // struct FFL_node* node=(struct FFL_node*)fi->fh;
+    // assert(node == (struct FFL_node*)fi->fh);
     char* end=malloc(100);
     sprintf(end,"size=%ld, offset=%ld, buf=%s, data len=%ld",size,offset,buf,strlen(node->data));
     addLog(end,path);
@@ -141,18 +141,23 @@ static int FFL_write(const char *path, const char *buf, size_t size, off_t offse
         // void *newp=realloc(node->data,offset+size+1);
         void *newp=(void*)malloc((offset+size+1)*sizeof(void));
         memcpy(newp,node->data,strlen(node->data));
-        // return -EPIPE;
         node->data=newp;
     }
     memcpy(node->data+offset,buf,size);
 
     //echo exchange-chat part
-    // if(!strCheck(path)) return 0;
-    // char *newPath=strChange(path);
-    // struct FFL_node* exNode=__search(&Root,newPath);
-    // if(exNode==NULL) return -EEXIST;
-    // if(strlen(exNode->data)<offset+size) exNode->data=realloc(exNode->data,offset+size+1);
-    // memcpy(exNode->data+offset,buf,size);
+    if(!strCheck(path)) return size;
+    char *newPath=strChange(path);
+    struct FFL_node* exNode=__search(&Root,newPath);
+    if(exNode==NULL) return -EEXIST;
+    if(strlen(exNode->data)<offset+size) 
+    {
+        // exNode->data=realloc(exNode->data,offset+size+1);
+        void *newp=(void*)malloc((offset+size+1)*sizeof(void));
+        memcpy(newp,exNode->data,strlen(exNode->data));
+        exNode->data=newp;
+    }
+    memcpy(exNode->data+offset,buf,size);
 
     return size;
 }
