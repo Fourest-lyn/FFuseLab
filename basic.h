@@ -12,13 +12,13 @@ struct FFL_node //This is a simple structure
     struct rb_node node;
 };
 
-static struct rb_root Root;
+static struct rb_root Root=RB_ROOT;
 
 static inline struct FFL_node *newNode(const char *path, void *data, int leaf_flag)
 {
     struct FFL_node* node=(struct FFL_node*)malloc(sizeof(struct FFL_node));
     node->path=strdup(path);
-    node->data=data;
+    if(data!=NULL) node->data=data;
     node->leaf_flag=leaf_flag;
     return node;
 }
@@ -82,7 +82,7 @@ static inline char* strChange(const char *path)
 
 static inline const char* getTail(const char *parent,const char *son)
 {
-    if(*(parent+1)=='\0' && *parent=='/' && *son=='/') return son;
+    if(*(parent+1)=='\0' && *parent=='/' && *son=='/' && strlen(parent)==1) return son;
     while(*parent!='\0' && *son!='\0' && *parent==*son) ++parent,++son;
     if(*parent=='\0' && *son=='/') return son;
     return NULL;

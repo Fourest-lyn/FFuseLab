@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <stddef.h>
 #include <assert.h>
+#include <stdbool.h>
 #include "basic.h"
 
 #define BLOCKSIZE (1024UL * 4)
@@ -37,7 +38,7 @@ static const struct fuse_opt option_spec[] =
 static void *FFL_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
 {
 	(void) conn;
-	cfg->kernel_cache = 1;
+	cfg->kernel_cache = 0;
 	return NULL;
 }
 
@@ -48,7 +49,7 @@ static int FFL_getattr(const char *path, struct stat *stbuf, struct fuse_file_in
 	memset(stbuf, 0, sizeof(struct stat));
     struct FFL_node *node=__search(&Root,path);
 
-	if (!node) return -ENOENT;
+	if (node==NULL) return -ENOENT;
     if (!node->leaf_flag)
     {
         stbuf->st_mode=__S_IFDIR | 0755;
@@ -65,11 +66,14 @@ static int FFL_getattr(const char *path, struct stat *stbuf, struct fuse_file_in
 
 static int FFL_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags)
 {
+    (void) flags;
+    (void) offset;
+    (void) fi;
     addLog("readdir",path);
 	filler(buf, ".", NULL, 0, 0);
     if(strcmp(path, "/") != 0) filler(buf, "..", NULL, 0, 0);
 	struct FFL_node* node=__search(&Root,path);
-    if(!node) return -ENOENT;
+    if(node==NULL) return -ENOENT;
     if(node->leaf_flag) return -ENOTDIR;
 
     struct rb_node *nodeN=NULL; //node_next
@@ -77,7 +81,7 @@ static int FFL_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_
     {
         const struct FFL_node *nodeT=rb_entry(nodeN,struct FFL_node,node);
         const char* tail=getTail(path,nodeT->path);
-        if(!tail) break;
+        if(tail==NULL) break;
         if(strchr(tail+1,'/')>0) continue;
         filler(buf,tail+1,NULL,0,0);
     }
@@ -88,7 +92,7 @@ static int FFL_open(const char *path, struct fuse_file_info *fi)
 {
     addLog("open",path);
     struct FFL_node *node=__search(&Root,path);
-    if(!node) 
+    if(node==NULL) 
     {
         if((fi->flags & O_ACCMODE) == O_RDONLY || !(fi->flags & O_CREAT)) return -EPERM;
         else
@@ -111,11 +115,11 @@ static int FFL_read(const char *path, char *buf, size_t size, off_t offset, stru
 
     addLog("read",path);
     struct FFL_node* node=__search(&Root,path);
-    if(!node) return -ENOENT;
+    if(node==NULL) return -ENOENT;
     assert(node == (struct FFL_node*)fi->fh);
 
     size_t len=strlen(node->data);
-    if(len<=offset) return 0;
+    if(len<offset) return 0;
     size = (offset+size>len) ? len-offset : size;
     memcpy(buf,node->data+offset,size);
 	return size;
@@ -126,35 +130,40 @@ static int FFL_write(const char *path, const char *buf, size_t size, off_t offse
     addLog("write",path);
     //common write part
     struct FFL_node*  node=__search(&Root,path);
-    if(!node) return -EEXIST;
+    if(node==NULL) return -EEXIST;
     assert(node == (struct FFL_node*)fi->fh);
     // struct FFL_node* node=(struct FFL_node*)fi->fh;
-    // char* end=malloc(100);
-    // sprintf(end,"size=%ld, offset=%ld, buf=%s, data len=%ld",size,offset,buf,strlen(node->data));
-    // addLog(end,path);
-    // return -EPIPE;
+    char* end=malloc(100);
+    sprintf(end,"size=%ld, offset=%ld, buf=%s, data len=%ld",size,offset,buf,strlen(node->data));
+    addLog(end,path);
     if(strlen(node->data)<offset+size) 
-        node->data=realloc(node->data,offset+size+1);
-    // return -EPIPE;
+    {
+        // void *newp=realloc(node->data,offset+size+1);
+        void *newp=(void*)malloc((offset+size+1)*sizeof(void));
+        memcpy(newp,node->data,strlen(node->data));
+        // return -EPIPE;
+        node->data=newp;
+    }
     memcpy(node->data+offset,buf,size);
 
     //echo exchange-chat part
     // if(!strCheck(path)) return 0;
     // char *newPath=strChange(path);
     // struct FFL_node* exNode=__search(&Root,newPath);
-    // if(!exNode) return -EEXIST;
-    // if(strlen(exNode->data)<offset+size) exNode->data=realloc(exNode->data,2*(offset+size));
+    // if(exNode==NULL) return -EEXIST;
+    // if(strlen(exNode->data)<offset+size) exNode->data=realloc(exNode->data,offset+size+1);
     // memcpy(exNode->data+offset,buf,size);
 
-    return 0;
+    return size;
 }
 
 static int FFL_mknod(const char *path, mode_t mode, dev_t dev) 
 {
+    (void) mode;
+    (void) dev;
     addLog("mknod",path);
-    struct FFL_node* node=newNode(path,EMPTY_FILE,1);
-    int ins=__insert(&Root,node);
-    if(!ins) 
+    struct FFL_node* node=newNode(path,EMPTY_FILE,true);
+    if(!__insert(&Root,node)) 
     {
         freeNode(node);
         return -EEXIST;
@@ -164,10 +173,10 @@ static int FFL_mknod(const char *path, mode_t mode, dev_t dev)
 
 static int FFL_mkdir(const char *path, mode_t mode) 
 {
+    (void) mode;
     addLog("mkdir",path);
     struct FFL_node* node=newNode(path,NULL,0);
-    int ins=__insert(&Root,node);
-    if(!ins) 
+    if(!__insert(&Root,node)) 
     {
         freeNode(node);
         return -EEXIST;
