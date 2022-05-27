@@ -6,7 +6,6 @@
  *      gcc -Wall main.c lib/rbtree.c `pkg-config fuse3 --cflags --libs` -o ffuse
 */
 
-
 #define FUSE_USE_VERSION 31
 
 #include <fuse.h>
@@ -18,6 +17,8 @@
 #include <assert.h>
 #include "basic.h"
 
+#define BLOCKSIZE (1024UL * 4)
+
 static struct options 
 {
 	const char *filename;
@@ -28,8 +29,6 @@ static struct options
 #define OPTION(t, p) { t, offsetof(struct options, p), 1 }
 static const struct fuse_opt option_spec[] = 
 {
-	// OPTION("--name=%s", filename),
-	// OPTION("--contents=%s", contents),
 	OPTION("-h", show_help),
 	OPTION("--help", show_help),
 	FUSE_OPT_END
@@ -44,12 +43,13 @@ static void *FFL_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
 
 static int FFL_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
 {
+    addLog("getattr",path);
 	(void) fi;
 	memset(stbuf, 0, sizeof(struct stat));
     struct FFL_node *node=__search(&Root,path);
 
 	if (!node) return -ENOENT;
-    if (node->leaf_flag)
+    if (!node->leaf_flag)
     {
         stbuf->st_mode=__S_IFDIR | 0755;
         stbuf->st_nlink=2;
@@ -63,57 +63,45 @@ static int FFL_getattr(const char *path, struct stat *stbuf, struct fuse_file_in
 	return 0;
 }
 
-static inline const char* getTail(const char *parent,const char *son)
-{
-    if(*(parent+1)=='\0' && *parent=='/' && *son=='/') return son;
-    while(*parent!='\0' && *son!='\0' && *parent==*son) ++parent,++son;
-    if(*parent=='\0' && *son=='/') return son;
-    return NULL;
-}
-
-
 static int FFL_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags)
 {
-    int ret=0;
-
+    addLog("readdir",path);
 	filler(buf, ".", NULL, 0, 0);
     if(strcmp(path, "/") != 0) filler(buf, "..", NULL, 0, 0);
 	struct FFL_node* node=__search(&Root,path);
-    if(!node) ret=-ENOENT;
-    if(node->leaf_flag) ret=-ENOTDIR;
+    if(!node) return -ENOENT;
+    if(node->leaf_flag) return -ENOTDIR;
 
     struct rb_node *nodeN=NULL; //node_next
-    for(nodeN=rb_next(&node->node);nodeN!=NULL;nodeN=rb_next(nodeN))
+    for(nodeN=rb_next(&node->node);nodeN;nodeN=rb_next(nodeN))
     {
-        const struct FFL_node *nodeT=rb_entry(nodeN,struct FFL_node, node);
+        const struct FFL_node *nodeT=rb_entry(nodeN,struct FFL_node,node);
         const char* tail=getTail(path,nodeT->path);
         if(!tail) break;
         if(strchr(tail+1,'/')>0) continue;
         filler(buf,tail+1,NULL,0,0);
     }
-
-	return ret;
+	return 0;
 }
 
 static int FFL_open(const char *path, struct fuse_file_info *fi)
 {
-    int ret=0;
+    addLog("open",path);
     struct FFL_node *node=__search(&Root,path);
     if(!node) 
     {
-        if((fi->flags & O_ACCMODE) == O_RDONLY || !(fi->flags & O_CREAT)) ret=-ENOENT;
+        if((fi->flags & O_ACCMODE) == O_RDONLY || !(fi->flags & O_CREAT)) return -EPERM;
         else
         {
-            node=newNode(path,NULL,1);
+            node=newNode(path,EMPTY_FILE,1);
             __insert(&Root,node);
         }
     }
-    else if(!node->leaf_flag) ret=-EISDIR;
+    else if(!node->leaf_flag) return -EISDIR;
     fi->fh=(unsigned long)node;
-	return ret;
+	return 0;
 }
 
-//This function should be banned
 static int FFL_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
     //len:      The true length of the content
@@ -121,6 +109,7 @@ static int FFL_read(const char *path, char *buf, size_t size, off_t offset, stru
     //offset:   The start point of the text
     //buf:      The output text
 
+    addLog("read",path);
     struct FFL_node* node=__search(&Root,path);
     if(!node) return -ENOENT;
     assert(node == (struct FFL_node*)fi->fh);
@@ -134,42 +123,75 @@ static int FFL_read(const char *path, char *buf, size_t size, off_t offset, stru
 
 static int FFL_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) 
 {
+    addLog("write",path);
     //common write part
-    // node=(struct FFL_node*) fi->fh;
     struct FFL_node*  node=__search(&Root,path);
     if(!node) return -EEXIST;
     assert(node == (struct FFL_node*)fi->fh);
-    if(strlen(node->data)<offset+size) node->data=realloc(node->data,2*(offset+size));
+    // struct FFL_node* node=(struct FFL_node*)fi->fh;
+    // char* end=malloc(100);
+    // sprintf(end,"size=%ld, offset=%ld, buf=%s, data len=%ld",size,offset,buf,strlen(node->data));
+    // addLog(end,path);
+    // return -EPIPE;
+    if(strlen(node->data)<offset+size) 
+        node->data=realloc(node->data,offset+size+1);
+    // return -EPIPE;
     memcpy(node->data+offset,buf,size);
 
     //echo exchange-chat part
-    if(!strCheck(path)) return 0;
-    char *newPath=strChange(path);
-    struct FFL_node* exNode=__search(&Root,newPath);
-    if(!exNode) return -EEXIST;
-    if(strlen(exNode->data)<offset+size) exNode->data=realloc(exNode->data,2*(offset+size));
-    memcpy(exNode->data+offset,buf,size);
+    // if(!strCheck(path)) return 0;
+    // char *newPath=strChange(path);
+    // struct FFL_node* exNode=__search(&Root,newPath);
+    // if(!exNode) return -EEXIST;
+    // if(strlen(exNode->data)<offset+size) exNode->data=realloc(exNode->data,2*(offset+size));
+    // memcpy(exNode->data+offset,buf,size);
 
-    return 0;
-}
-
-static int FFL_release(const char *path, struct fuse_file_info *fi) {return 0;}
-
-static int FFL_mkdir(const char *path, mode_t mode) 
-{
-    struct FFL_node* node=newNode(path,NULL,0);
-    int ins=__insert(&Root,node);
-    if(!ins) return -EEXIST;
     return 0;
 }
 
 static int FFL_mknod(const char *path, mode_t mode, dev_t dev) 
 {
-    struct FFL_node* node=newNode(path,NULL,1);
+    addLog("mknod",path);
+    struct FFL_node* node=newNode(path,EMPTY_FILE,1);
     int ins=__insert(&Root,node);
-    if(!ins) return -EEXIST;
+    if(!ins) 
+    {
+        freeNode(node);
+        return -EEXIST;
+    }
     return 0;
 }
+
+static int FFL_mkdir(const char *path, mode_t mode) 
+{
+    addLog("mkdir",path);
+    struct FFL_node* node=newNode(path,NULL,0);
+    int ins=__insert(&Root,node);
+    if(!ins) 
+    {
+        freeNode(node);
+        return -EEXIST;
+    }
+    return 0;
+}
+
+static int FFL_access(const char *path, int mask)
+{
+    addLog("access",path);
+    struct FFL_node *node=__search(&Root,path);
+    if(!node) return -ENOENT;
+    return 0;
+}
+
+static int FFL_utimens(const char *path, const struct timespec tv[2],struct fuse_file_info *fi)
+{
+    (void) tv;
+    (void) fi;
+    addLog("utimens",path);
+    return 0;
+}
+
+static int FFL_release(const char *path, struct fuse_file_info *fi) {addLog("release",path); return 0;}
 
 static const struct fuse_operations FFL_op = 
 {
@@ -178,14 +200,17 @@ static const struct fuse_operations FFL_op =
 	.readdir	= FFL_readdir,
 	.open		= FFL_open,
 	.read		= FFL_read,
-    .mknod      = FFL_mknod,
     .write      = FFL_write,
-    .release    = FFL_release,
+    .mknod      = FFL_mknod,
     .mkdir      = FFL_mkdir,
+    .access     = FFL_access,
+    .utimens    = FFL_utimens,
+    .release    = FFL_release,
 };
 
 static void show_help(const char *progname)
 {
+    printf("This is a Fuse lab created by Fourest.\n");
 	printf("usage: %s [options] <mountpoint>\n\n", progname);
 }
 
@@ -199,11 +224,16 @@ int main(int argc, char *argv[])
 	if (options.show_help) 
     {
 		show_help(argv[0]);
-		assert(fuse_opt_add_arg(&args, "--help") == 0); //This line is the help represent api with libfuse.
+		assert(fuse_opt_add_arg(&args, "--help") == 0);
 		args.argv[0][0] = '\0';
 	}
 
     __insert(&Root,newNode("/",NULL,0));
+
+    //debug
+    struct FFL_node* logNode=newNode("/log",Log,1);
+    __insert(&Root,logNode);
+
 	ret = fuse_main(args.argc, args.argv, &FFL_op, NULL);
 	fuse_opt_free_args(&args);
 	return ret;
